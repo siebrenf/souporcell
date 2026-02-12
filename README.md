@@ -71,7 +71,7 @@ optional arguments:
   --restarts RESTARTS   number of restarts in clustering, when there are > 12
                         clusters we recommend increasing this to avoid local
                         minima
-                         --common_variants COMMON_VARIANTS
+  --common_variants COMMON_VARIANTS
                         common variant loci or known variant loci vcf, must be
                         vs same reference fasta
   --known_genotypes KNOWN_GENOTYPES
