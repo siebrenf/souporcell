@@ -51,22 +51,7 @@ import os
 print("imports done")
 
 
-open_function = lambda f: gzip.open(f,"rt") if f[-3:] == ".gz" else open(f)
-
-print("checking bam for expected tags")
-UMI_TAG = args.umi_tag
-CELL_TAG = args.cell_tag
-# assert CELL_TAG == "CB", "vartrix doesnt support different cell tags, remake bam with cell tag as CB"
-#load each file to make sure it is legit
-bc_set = set()
-with open_function(args.barcodes) as barcodes:
-    for (index, line) in enumerate(barcodes):
-        bc = line.strip()
-        bc_set.add(bc)
-
-assert len(bc_set) > 50, "Fewer than 50 barcodes in barcodes file? We expect 1 barcode per line."
 assert args.aligner == "minimap2" or args.aligner == "HISAT2", "--aligner expects minimap2 or HISAT2"
-
 assert not(not(args.known_genotypes == None) and not(args.common_variants == None)), "cannot set both know_genotypes and common_variants"
 if args.known_genotypes_sample_names:
     assert not(args.known_genotypes == None), "if you specify known_genotype_sample_names, must specify known_genotypes option"
@@ -79,34 +64,47 @@ if args.known_genotypes:
     for sample in args.known_genotypes_sample_names:
         assert sample in args.known_genotypes_sample_names, "not all samples in known genotype sample names option are in the known genotype samples vcf?"
 
-#test bam load
-bam = pysam.AlignmentFile(args.bam)
-num_cb = 0
-num_cb_cb = 0 # num reads with barcodes from barcodes.tsv file
-num_umi = 0
-num_read_test = 100000
-for (index,read) in enumerate(bam):
-    if index >= num_read_test:
-        break
-    if read.has_tag(CELL_TAG):
-        num_cb += 1
-        if read.get_tag(CELL_TAG) in bc_set:
-            num_cb_cb += 1
-    if read.has_tag(UMI_TAG):
-        num_umi += 1
-bam.close()
+# test bam load
 if not args.ignore:
+    print("checking bam for expected tags")
+    open_function = lambda f: gzip.open(f, "rt") if f[-3:] == ".gz" else open(f)
+    UMI_TAG = args.umi_tag
+    CELL_TAG = args.cell_tag
+    # assert CELL_TAG == "CB", "vartrix doesnt support different cell tags, remake bam with cell tag as CB"
+    # load each file to make sure it is legit
+    bc_set = set()
+    with open_function(args.barcodes) as barcodes:
+        for (index, line) in enumerate(barcodes):
+            bc = line.strip()
+            bc_set.add(bc)
+    assert len(bc_set) > 50, "Fewer than 50 barcodes in barcodes file? We expect 1 barcode per line."
+
+    bam = pysam.AlignmentFile(args.bam)
+    num_cb = 0
+    num_cb_cb = 0 # num reads with barcodes from barcodes.tsv file
+    num_umi = 0
+    num_read_test = 100000
+    for (index,read) in enumerate(bam):
+        if index >= num_read_test:
+            break
+        if read.has_tag(CELL_TAG):
+            num_cb += 1
+            if read.get_tag(CELL_TAG) in bc_set:
+                num_cb_cb += 1
+        if read.has_tag(UMI_TAG):
+            num_umi += 1
+    bam.close()
     if args.skip_remap and args.common_variants == None and args.known_genotypes == None:
         assert False, "WARNING: skip_remap enables without common_variants or known genotypes. Variant calls will be of poorer quality. Turn on --ignore True to ignore this warning"
-        
+
     assert float(num_cb) / float(num_read_test) > 0.5, "Less than 50% of first 100000 reads have cell barcode tag (CB), turn on --ignore True to ignore"
     if not(args.no_umi):
         assert float(num_umi) / float(num_read_test) > 0.5, "Less than 50% of first 100000 reads have UMI tag (UB), turn on --ignore True to ignore"
     assert float(num_cb_cb) / float(num_read_test) > 0.05, "Less than 25% of first 100000 reads have cell barcodes from barcodes file, is this the correct barcode file? turn on --ignore True to ignore"
 
-print("checking fasta")
-fasta = pyfaidx.Fasta(args.fasta, key_function = lambda key: key.split()[0])
-fasta.close()
+    print("checking fasta")
+    fasta = pyfaidx.Fasta(args.fasta, key_function = lambda key: key.split()[0])
+    fasta.close()
 
 def get_fasta_regions(fastaname, threads):
     fasta = pyfaidx.Fasta(fastaname, key_function = lambda key: key.split()[0])
@@ -253,6 +251,7 @@ def remap(args, region_fastqs, all_fastqs):
                     cmd = ["minimap2", "-ax", "splice", "-t", str(args.threads), "-G50k", "-k", "21",
                         "-w", "11", "--sr", "-A2", "-B8", "-O12,32", "-E2,1", "-r200", "-p.5", "-N20", "-f1000,5000",
                         "-n2", "-m20", "-s40", "-g2000", "-2K50m", "--secondary=no", "-I", args.max_base_mem, args.fasta, args.out_dir + "/tmp.fq"]
+                    print(" ".join(cmd))
                     minierr.write(" ".join(cmd)+"\n")
                     subprocess.check_call(cmd, stdout = samfile, stderr = minierr)
         subprocess.check_call(['rm', args.out_dir + "/tmp.fq"])
@@ -345,7 +344,7 @@ def freebayes(args, bam):
         regions = get_bam_regions(bam, int(args.threads))
         depth_files = []
         depth_procs = []
-        print(len(regions))
+        print(len(regions), "BAM regions")
         for (index, region) in enumerate(regions):
             region_args = []
             for (chrom, start, stop) in region:
@@ -384,16 +383,24 @@ def freebayes(args, bam):
         with open(args.out_dir + "/logs/bed_intersect.err", 'w') as intersect_err:
             with open(args.out_dir + "/common_variants_covered_tmp.vcf", 'w') as vcf:
                 subprocess.check_call(["bedtools", "intersect", "-wa", "-a", args.common_variants, "-b", args.out_dir + "/depth_merged.bed"], stdout = vcf, stderr = intersect_err)
-        with open(args.out_dir + "/common_variants_covered_tmp.vcf") as vcf:
+        n = 0
+        with open(args.out_dir + "/common_variants_covered.vcf", 'w') as out:
             with open(args.common_variants) as common:
-                with open(args.out_dir + "/common_variants_covered.vcf",'w') as out:
-                    for line in common:
-                        if line.startswith("#"):
-                            out.write(line)
-                        else:
-                            break
-                    for line in vcf:
+                for line in common:
+                    if line.startswith("#"):
                         out.write(line)
+                    else:
+                        break
+            with open(args.out_dir + "/common_variants_covered_tmp.vcf") as vcf:
+                for line in vcf:
+                    out.write(line)
+                    n += 1
+        print(n, "variants covered")
+        if n == 0:
+            raise ValueError(
+                "No variants found in the BAM file! "
+                "Do the chromosome names match between the BAM and common_variants vcf file?"
+            )
         with open(args.out_dir + "/variants.done", 'w') as done:
             done.write(args.out_dir + "/common_variants_covered.vcf" + "\n")
         return(args.out_dir + "/common_variants_covered.vcf")
@@ -491,11 +498,12 @@ def vartrix(args, final_vcf, final_bam):
             subprocess.check_call(['gunzip', '-c', barcodes],stdout = bcsout)
         barcodes = args.out_dir + "/barcodes.tsv"
     with open(args.out_dir + "/logs/vartrix.err", 'w') as err:
-        with open(args.out_dir + "/vartrix.out", 'w') as out:
+        with open(args.out_dir + "/logs/vartrix.out", 'w') as out:
             cmd = ["vartrix", "--mapq", "30", "-b", final_bam, "-c", barcodes, "--scoring-method", "coverage", "--threads", str(args.threads),
                 "--ref-matrix", ref_mtx, "--out-matrix", alt_mtx, "-v", final_vcf, "--fasta", args.fasta, "--bam-tag", str(args.cell_tag)]
             if not(args.no_umi) and args.umi_tag == "UB":
                 cmd.append("--umi")
+            print(" ".join(cmd))
             subprocess.check_call(cmd, stdout = out, stderr = err)
     subprocess.check_call(['touch', args.out_dir + "/vartrix.done"])
     return((ref_mtx, alt_mtx))
